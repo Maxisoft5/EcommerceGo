@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 10s
+rule_files: [/etc/prometheus/alerts.yml]
+scrape_configs:
+  - job_name: flashcart
+    static_configs:
+      - targets: [gateway:8081, identity:8080, catalog:8080, orders:8080, inventory:8080, projection:8080]

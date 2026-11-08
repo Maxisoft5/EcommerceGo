@@ -1,0 +1,11 @@
+services:
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    profiles: [test]
+    environment:
+      TEST_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?}@postgres:5432/postgres?sslmode=disable
+    networks: [backend]
+    depends_on:
+      postgres: {condition: service_healthy}

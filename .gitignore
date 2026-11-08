@@ -1,0 +1,9 @@
+.env
+.secrets/
+.tools/
+bin/
+coverage.out
+artifacts/
+*.test
+!Dockerfile.test
+*.exe

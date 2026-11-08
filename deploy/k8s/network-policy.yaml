@@ -1,0 +1,117 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: dns-and-internal-egress}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector: {}
+      ports:
+        - {port: 8080}
+        - {port: 9090}
+        - {port: 9092}
+        - {port: 9093}
+        - {port: 5432}
+        - {port: 6379}
+        - {port: 9200}
+        - {port: 9300}
+        - {port: 8123}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: gateway-public}
+spec:
+  podSelector: {matchLabels: {app: gateway}}
+  policyTypes: [Ingress]
+  ingress:
+    - ports: [{port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: http-services}
+spec:
+  podSelector: {matchLabels: {tier: app}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: gateway}}}]
+      ports: [{port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: catalog-quotes}
+spec:
+  podSelector: {matchLabels: {app: catalog}}
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: orders}}}]
+      ports: [{port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: inventory-grpc}
+spec:
+  podSelector: {matchLabels: {app: inventory}}
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: orders}}}]
+      ports: [{port: 9090}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: postgres-owners}
+spec:
+  podSelector: {matchLabels: {app: postgres}}
+  ingress:
+    - from:
+        - podSelector: {matchExpressions: [{key: app, operator: In, values: [identity, catalog, inventory]}]}
+      ports: [{port: 5432}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: order-shards}
+spec:
+  podSelector: {matchLabels: {tier: order-db}}
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: orders}}}]
+      ports: [{port: 5432}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: kafka-producers-consumers}
+spec:
+  podSelector: {matchLabels: {app: kafka}}
+  ingress:
+    - from:
+        - podSelector: {matchExpressions: [{key: app, operator: In, values: [orders, catalog, inventory, projection, kafka-init, kafka]}]}
+      ports: [{port: 9092}, {port: 9093}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: redis-clients}
+spec:
+  podSelector: {matchLabels: {app: redis}}
+  ingress:
+    - from:
+        - podSelector: {matchExpressions: [{key: app, operator: In, values: [gateway, catalog, projection]}]}
+      ports: [{port: 6379}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: projection-stores}
+spec:
+  podSelector: {matchLabels: {tier: projection-db}}
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: projection}}}]
+      ports: [{port: 9200}, {port: 8123}]

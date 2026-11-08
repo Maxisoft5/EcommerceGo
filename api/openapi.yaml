@@ -1,0 +1,512 @@
+openapi: 3.0.3
+info:
+  title: mesto Marketplace API
+  version: 2.0.0
+  description: Buyers, seller-owned listings and limited stock. New money values are integer RUB kopecks; legacy orders retain currency. Confirmed means inventory reservation, not payment capture.
+servers:
+  - url: https://localhost:8443
+tags:
+  - name: Auth
+  - name: Catalog
+  - name: Orders
+  - name: Realtime
+  - name: Analytics
+  - name: Sellers
+  - name: Stock
+paths:
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register customer or seller; seller requires shop_name; admin prohibited
+      requestBody: {$ref: '#/components/requestBodies/Registration'}
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate and issue 10-minute access / 7-day refresh tokens
+      requestBody: {$ref: '#/components/requestBodies/Credentials'}
+      responses:
+        '200':
+          description: Tokens; Cache-Control no-store
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Tokens'}
+        '401': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate once; reuse revokes the complete refresh family
+      requestBody: {$ref: '#/components/requestBodies/Refresh'}
+      responses:
+        '200':
+          description: Rotated refresh; absolute family expiry unchanged
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Tokens'}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke refresh family; access JWT valid until expiry
+      requestBody: {$ref: '#/components/requestBodies/Refresh'}
+      responses:
+        '204': {description: Family revoked or token unknown}
+  /api/products:
+    get:
+      tags: [Catalog]
+      summary: First 100 products ordered by SKU
+      responses:
+        '200':
+          description: Catalog products
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Product'}}
+  /api/products/{sku}:
+    parameters:
+      - {in: path, name: sku, required: true, schema: {type: string, pattern: '^[a-zA-Z0-9_-]{1,64}$'}}
+    get:
+      tags: [Catalog]
+      summary: Product card; cache TTL 5 seconds
+      responses:
+        '200':
+          description: Product
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Product'}
+        '404': {$ref: '#/components/responses/Error'}
+    put:
+      tags: [Catalog]
+      summary: Admin upsert product; inventory provisioning is separate
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, price_cents]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 200}
+                price_cents: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+      responses:
+        '200':
+          description: Product persisted with new version and outbox event
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Product'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/search:
+    get:
+      tags: [Catalog]
+      summary: Eventual product search; OpenSearch response envelope, up to 20 hits
+      parameters:
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+      responses:
+        '200':
+          description: OpenSearch search response with hits.hits[*]._source product
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '503': {$ref: '#/components/responses/Error'}
+  /api/orders:
+    get:
+      tags: [Orders]
+      security: [{bearerAuth: []}]
+      summary: Latest 50 orders owned by caller; authoritative owner shard
+      responses:
+        '200':
+          description: Own orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Order'}}
+        '401': {$ref: '#/components/responses/Error'}
+    post:
+      tags: [Orders]
+      security: [{bearerAuth: []}]
+      summary: Persist pending order atomically with idempotency and outbox
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: {type: string, pattern: '^[a-zA-Z0-9_-]{8,80}$'}
+          description: Scoped by caller. Same canonical items returns current order; different items conflicts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items: {$ref: '#/components/schemas/RequestedItem'}
+      responses:
+        '202':
+          description: Accepted, or current state on idempotent replay
+          headers:
+            Location: {schema: {type: string}, description: Order resource path}
+            Idempotency-Replayed: {schema: {type: string, enum: ['true']}, description: Present on replay}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Order'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /api/orders/{id}:
+    get:
+      tags: [Orders]
+      security: [{bearerAuth: []}]
+      summary: Own order; nonexistent and foreign orders both return 404
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Authoritative order state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Order'}
+        '401': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/ws-ticket:
+    post:
+      tags: [Realtime]
+      security: [{bearerAuth: []}]
+      summary: Mint single-use WS ticket, TTL up to 30 seconds
+      responses:
+        '201':
+          description: Ticket; Cache-Control no-store
+          content:
+            application/json:
+              schema: {type: object, properties: {ticket: {type: string, minLength: 64, maxLength: 64}}}
+        '401': {$ref: '#/components/responses/Error'}
+  /ws:
+    get:
+      tags: [Realtime]
+      summary: Upgrade to WSS; messages are schema-1 Kafka envelopes for caller's orders
+      description: Best effort stream. Restore with REST snapshots; connection closes at access JWT expiry.
+      parameters:
+        - {in: query, name: ticket, required: true, schema: {type: string}}
+      responses:
+        '101': {description: WebSocket upgrade}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/analytics/summary:
+    get:
+      tags: [Analytics]
+      security: [{bearerAuth: []}]
+      summary: Admin aggregate with ClickHouse FINAL deduplication
+      responses:
+        '200':
+          description: Counts and revenue; ClickHouse UInt64/Int64 serialized as decimal strings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created: {type: string}
+                  confirmed: {type: string}
+                  rejected: {type: string}
+                  revenue_cents: {type: string}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      security: [{bearerAuth: []}]
+      summary: Own account profile
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: string}
+                  email: {type: string}
+                  role: {type: string, enum: [customer, seller, admin]}
+                  shop_name: {type: string}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/stock:
+    get:
+      tags: [Stock]
+      summary: Public authoritative stock snapshots, up to 100 SKUs
+      parameters:
+        - {in: query, name: skus, schema: {type: string, maxLength: 6500}, description: Comma separated SKUs; empty selects first 100}
+      responses:
+        '200':
+          description: Snapshot; compare version before applying over a streamed update
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Stock'}}
+  /ws/catalog:
+    get:
+      tags: [Realtime]
+      summary: Public WSS stock/product stream; no JWT; no private order events
+      responses:
+        '101': {description: 'Upgrade; schema-1 stock.updated/product.updated envelopes, reconnect after 30 minutes'}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/seller/products:
+    get:
+      tags: [Sellers]
+      security: [{bearerAuth: []}]
+      summary: First 100 listings owned by the authenticated seller
+      responses:
+        '200':
+          description: Own products
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Product'}}
+        '403': {$ref: '#/components/responses/Error'}
+    post:
+      tags: [Sellers]
+      security: [{bearerAuth: []}]
+      summary: Idempotent listing creation; asynchronous initial inventory allocation
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProductInput'}
+      responses:
+        '201':
+          description: SKU and ownership assigned by server; replay returns the same SKU
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Product'}
+        '400': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/seller/products/{sku}:
+    parameters:
+      - {in: path, name: sku, required: true, schema: {type: string}}
+    put:
+      tags: [Sellers]
+      security: [{bearerAuth: []}]
+      summary: Owner-only metadata update; omit initial_stock or set zero, allocation remains immutable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProductInput'}
+      responses:
+        '200':
+          description: New product version
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Product'}
+        '400': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/seller/stock/{sku}/adjustments:
+    parameters:
+      - {in: path, name: sku, required: true, schema: {type: string}}
+    post:
+      tags: [Sellers, Stock]
+      security: [{bearerAuth: []}]
+      summary: Owner-only additive stock change, serialized with reservations
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [delta]
+              properties:
+                delta: {type: integer, minimum: -100000, maximum: 100000, description: Nonzero; resulting stock must be 0..1000000}
+      responses:
+        '200':
+          description: Saved result, identical on key replay; later changes may have newer version
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Stock'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/seller/orders:
+    get:
+      tags: [Sellers]
+      security: [{bearerAuth: []}]
+      summary: Latest 50 own seller order views merged across both physical shards
+      description: Each view contains only this seller's lines and subtotal; no buyer ID. Private WSS emits seller.order.updated with the same filtered shape.
+      responses:
+        '200':
+          description: Own sales
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/SellerOrder'}}
+        '403': {$ref: '#/components/responses/Error'}
+components:
+  parameters:
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema: {type: string, pattern: '^[a-zA-Z0-9_-]{8,80}$'}
+      description: Seller-scoped; same key with another payload returns 409
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  responses:
+    Error:
+      description: JSON error; gateway may also return 429/503 for rate limiter
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties: {error: {type: string}}
+  requestBodies:
+    Registration:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [email, password]
+            properties:
+              email: {type: string, format: email, maxLength: 254}
+              password: {type: string, minLength: 12, maxLength: 72, description: Server checks byte length}
+              role: {type: string, enum: [customer, seller], default: customer}
+              shop_name: {type: string, maxLength: 120, description: Seller requires 2..120 UTF-8 bytes; empty for customer}
+    Credentials:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [email, password]
+            properties:
+              email: {type: string, format: email, maxLength: 254}
+              password: {type: string, format: password, minLength: 12, maxLength: 72, description: Server checks UTF-8 byte length}
+    Refresh:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [refresh_token]
+            properties: {refresh_token: {type: string, minLength: 64, maxLength: 64}}
+  schemas:
+    Tokens:
+      type: object
+      properties:
+        access_token: {type: string}
+        refresh_token: {type: string}
+        token_type: {type: string, enum: [Bearer]}
+        expires_in: {type: integer, enum: [600]}
+    Product:
+      type: object
+      required: [sku, name, price_cents, version]
+      properties:
+        sku: {type: string}
+        name: {type: string}
+        price_cents: {type: integer, format: int64}
+        version: {type: integer, format: int64}
+        seller_id: {type: string}
+        seller_name: {type: string}
+        description: {type: string}
+        category: {type: string, enum: [electronics, home, fashion, sport]}
+        image_key: {type: string}
+        old_price_cents: {type: integer, format: int64}
+        initial_stock: {type: integer, description: Immutable initial allocation; not current availability}
+        currency: {type: string, enum: [RUB]}
+    RequestedItem:
+      type: object
+      additionalProperties: false
+      required: [sku, quantity]
+      properties:
+        sku: {type: string, pattern: '^[a-zA-Z0-9_-]{1,64}$'}
+        quantity: {type: integer, minimum: 1, maximum: 100}
+    PricedItem:
+      type: object
+      required: [sku, quantity, price_cents]
+      properties:
+        sku: {type: string}
+        quantity: {type: integer}
+        price_cents: {type: integer, format: int64}
+        name: {type: string}
+        seller_id: {type: string}
+        seller_name: {type: string}
+        image_key: {type: string}
+    Order:
+      type: object
+      required: [id, user_id, status, items, total_cents, reason, version]
+      properties:
+        id: {type: string}
+        user_id: {type: string}
+        status: {type: string, enum: [pending, confirmed, rejected]}
+        items: {type: array, items: {$ref: '#/components/schemas/PricedItem'}}
+        total_cents: {type: integer, format: int64}
+        reason: {type: string}
+        version: {type: integer, format: int64}
+        currency: {type: string, enum: [RUB, USD]}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    ProductInput:
+      type: object
+      additionalProperties: false
+      required: [name, price_cents]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        price_cents: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        old_price_cents: {type: integer, format: int64, minimum: 0, maximum: 1000000000, description: Zero or at least price_cents}
+        description: {type: string, maxLength: 4000}
+        category: {type: string, enum: [electronics, home, fashion, sport], default: electronics}
+        image_key: {type: string, enum: [headphones, keyboard, monitor, backpack, lamp, sneakers, kettle, watch, camera], default: headphones}
+        initial_stock: {type: integer, minimum: 0, maximum: 1000000, default: 0}
+    Stock:
+      type: object
+      required: [sku, available, version]
+      properties:
+        sku: {type: string}
+        available: {type: integer, minimum: 0}
+        version: {type: integer, format: int64}
+    SellerOrder:
+      type: object
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [pending, confirmed, rejected]}
+        items: {type: array, items: {$ref: '#/components/schemas/PricedItem'}}
+        total_cents: {type: integer, format: int64, description: Subtotal for THIS seller only}
+        currency: {type: string}
+        created_at: {type: string, format: date-time}
+        version: {type: integer, format: int64}

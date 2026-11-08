@@ -1,0 +1,20 @@
+syntax = "proto3";
+package inventory.v1;
+option go_package = "flashcart/api/gen/inventory/v1;inventoryv1";
+
+service InventoryService {
+  // Replaying the same order with the same items returns the original decision.
+  rpc Reserve(ReserveRequest) returns (ReserveResponse);
+}
+message Item {
+  string sku = 1;
+  int32 quantity = 2;
+}
+message ReserveRequest {
+  string order_id = 1;
+  repeated Item items = 2;
+}
+message ReserveResponse {
+  bool accepted = 1;
+  string reason = 2;
+}

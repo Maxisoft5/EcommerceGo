@@ -1,0 +1,10 @@
+groups:
+  - name: flashcart
+    rules:
+      - alert: FlashCartHighErrorRate
+        expr: sum(rate(flashcart_http_requests_total{status_class="5xx"}[5m])) / clamp_min(sum(rate(flashcart_http_requests_total[5m])), 1) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FlashCart HTTP error ratio exceeds 1%"

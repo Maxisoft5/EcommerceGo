@@ -1,0 +1,8 @@
+FROM golang:1.25.5-alpine
+RUN apk add --no-cache gcc musl-dev
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ENV CGO_ENABLED=1
+CMD ["sh", "-ec", "go test -race -count=1 ./... && go test -race -tags=integration -count=1 -v ./tests/..."]

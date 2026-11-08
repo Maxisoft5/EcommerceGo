@@ -1,0 +1,232 @@
+name: flashcart
+x-app: &app
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  networks: [backend]
+  deploy:
+    resources:
+      limits:
+        cpus: '1.0'
+        memory: 256M
+x-pg-health: &pg-health
+  test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+  interval: 5s
+  timeout: 3s
+  retries: 30
+x-public-key: &public-key
+  type: bind
+  source: ./.secrets/jwt-public.pem
+  target: /run/keys/jwt-public.pem
+  read_only: true
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run go run ./cmd/bootstrap}
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:?}
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:?}
+      INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD:?}
+    volumes: [pg:/var/lib/postgresql/data, ./deploy/postgres/init.sh:/docker-entrypoint-initdb.d/10-init.sh:ro]
+    healthcheck: *pg-health
+    networks: [backend]
+    restart: unless-stopped
+  orders-db-0:
+    image: postgres:17.6-alpine
+    environment: &orders-db-env
+      POSTGRES_USER: orders
+      POSTGRES_DB: orders
+      POSTGRES_PASSWORD: ${ORDERS_DB_PASSWORD:?}
+    volumes: [orders0:/var/lib/postgresql/data]
+    healthcheck: *pg-health
+    networks: [backend]
+    restart: unless-stopped
+  orders-db-1:
+    image: postgres:17.6-alpine
+    environment: *orders-db-env
+    volumes: [orders1:/var/lib/postgresql/data]
+    healthcheck: *pg-health
+    networks: [backend]
+    restart: unless-stopped
+  kafka:
+    image: apache/kafka:4.1.2
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LOG_RETENTION_HOURS: 168
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes: [kafka:/var/lib/kafka/data]
+    healthcheck:
+      test: [CMD-SHELL, '/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1']
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    networks: [backend]
+    restart: unless-stopped
+  kafka-init:
+    image: apache/kafka:4.1.2
+    depends_on:
+      kafka: {condition: service_healthy}
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic commerce.events.v1 --partitions 12 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic commerce.dlq.v1 --partitions 3 --replication-factor 1
+    networks: [backend]
+  redis:
+    image: redis:7.4.6-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+    command: [/bin/sh, -ec, 'exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}" --maxmemory 256mb --maxmemory-policy noeviction']
+    volumes: [redis:/data]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$${REDIS_PASSWORD}" redis-cli ping | grep PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [backend]
+    restart: unless-stopped
+  opensearch:
+    image: opensearchproject/opensearch:3.3.2
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: 'true'
+      DISABLE_INSTALL_DEMO_CONFIG: 'true'
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ulimits:
+      memlock: {soft: -1, hard: -1}
+    volumes: [search:/usr/share/opensearch/data]
+    healthcheck:
+      test: [CMD-SHELL, 'curl -fs http://localhost:9200/_cluster/health >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 40
+    networks: [backend]
+    restart: unless-stopped
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8.3.66-alpine
+    environment:
+      CLICKHOUSE_DB: commerce
+      CLICKHOUSE_USER: flashcart
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    volumes: [clickhouse:/var/lib/clickhouse]
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O - http://127.0.0.1:8123/ping | grep Ok']
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    networks: [backend]
+    restart: unless-stopped
+  identity:
+    <<: *app
+    build: {context: ., args: {SERVICE: identity}}
+    environment:
+      DATABASE_URL: ${IDENTITY_URL:?}
+      JWT_PRIVATE_KEY: /run/keys/jwt-private.pem
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?}
+    volumes: [./.secrets/jwt-private.pem:/run/keys/jwt-private.pem:ro]
+    depends_on:
+      postgres: {condition: service_healthy}
+  catalog:
+    <<: *app
+    build: {context: ., args: {SERVICE: catalog}}
+    environment:
+      DATABASE_URL: ${CATALOG_URL:?}
+      JWT_PUBLIC_KEY: /run/keys/jwt-public.pem
+      REDIS_URL: ${REDIS_URL:?}
+    volumes: [*public-key]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+  inventory:
+    <<: *app
+    build: {context: ., args: {SERVICE: inventory}}
+    environment:
+      DATABASE_URL: ${INVENTORY_URL:?}
+      JWT_PUBLIC_KEY: /run/keys/jwt-public.pem
+      GRPC_CA: /run/keys/ca.pem
+      GRPC_CERT: /run/keys/inventory.pem
+      GRPC_KEY: /run/keys/inventory-key.pem
+    volumes: [*public-key, ./.secrets/ca.pem:/run/keys/ca.pem:ro, ./.secrets/inventory.pem:/run/keys/inventory.pem:ro, ./.secrets/inventory-key.pem:/run/keys/inventory-key.pem:ro]
+    depends_on:
+      postgres: {condition: service_healthy}
+  orders:
+    <<: *app
+    build: {context: ., args: {SERVICE: orders}}
+    environment:
+      ORDERS_SHARD_0_URL: ${ORDERS_SHARD_0_URL:?}
+      ORDERS_SHARD_1_URL: ${ORDERS_SHARD_1_URL:?}
+      CATALOG_URL: http://catalog:8080
+      JWT_PUBLIC_KEY: /run/keys/jwt-public.pem
+      GRPC_CA: /run/keys/ca.pem
+      GRPC_CERT: /run/keys/orders.pem
+      GRPC_KEY: /run/keys/orders-key.pem
+    volumes: [*public-key, ./.secrets/ca.pem:/run/keys/ca.pem:ro, ./.secrets/orders.pem:/run/keys/orders.pem:ro, ./.secrets/orders-key.pem:/run/keys/orders-key.pem:ro]
+    depends_on:
+      orders-db-0: {condition: service_healthy}
+      orders-db-1: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+  projection:
+    <<: *app
+    build: {context: ., args: {SERVICE: projection}}
+    environment:
+      JWT_PUBLIC_KEY: /run/keys/jwt-public.pem
+      REDIS_URL: ${REDIS_URL:?}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
+    volumes: [*public-key]
+    depends_on:
+      redis: {condition: service_healthy}
+      opensearch: {condition: service_healthy}
+      clickhouse: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+  gateway:
+    <<: *app
+    build: {context: ., args: {SERVICE: gateway}}
+    environment:
+      JWT_PUBLIC_KEY: /run/keys/jwt-public.pem
+      REDIS_URL: ${REDIS_URL:?}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-https://localhost:8443}
+      HTTP_TLS_CERT: /run/keys/gateway.pem
+      HTTP_TLS_KEY: /run/keys/gateway-key.pem
+      HEALTH_PORT: '8081'
+    volumes: [*public-key, ./.secrets/gateway.pem:/run/keys/gateway.pem:ro, ./.secrets/gateway-key.pem:/run/keys/gateway-key.pem:ro]
+    ports: [127.0.0.1:8443:8080]
+    depends_on: [identity, catalog, orders, inventory, projection]
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    command: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.retention.time=7d]
+    volumes: [./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro, ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro, prometheus:/prometheus]
+    ports: [127.0.0.1:9091:9090]
+    networks: [backend]
+    profiles: [observability]
+networks:
+  backend: {}
+volumes:
+  pg: {}
+  orders0: {}
+  orders1: {}
+  kafka: {}
+  redis: {}
+  search: {}
+  clickhouse: {}
+  prometheus: {}

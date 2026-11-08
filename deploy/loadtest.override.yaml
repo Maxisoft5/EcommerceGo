@@ -1,0 +1,6 @@
+# Local benchmark only. Never use these limits on a public endpoint.
+services:
+  gateway:
+    environment:
+      RATE_LIMIT_PER_MINUTE: '120000'
+      AUTH_RATE_LIMIT_PER_MINUTE: '20000'

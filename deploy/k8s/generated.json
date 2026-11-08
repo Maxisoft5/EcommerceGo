@@ -1,0 +1,2485 @@
+{
+  "apiVersion": "v1",
+  "items": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "gateway"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "gateway",
+            "tier": "app"
+          }
+        },
+        "strategy": {
+          "rollingUpdate": {
+            "maxSurge": 1,
+            "maxUnavailable": 0
+          },
+          "type": "RollingUpdate"
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "gateway",
+              "tier": "app"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "JWT_PUBLIC_KEY",
+                    "value": "/run/keys/jwt-public.pem"
+                  },
+                  {
+                    "name": "REDIS_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "REDIS_URL",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PUBLIC_ORIGIN",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "PUBLIC_ORIGIN",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "HTTP_TLS_CERT",
+                    "value": "/run/keys/gateway.pem"
+                  },
+                  {
+                    "name": "HTTP_TLS_KEY",
+                    "value": "/run/keys/gateway-key.pem"
+                  }
+                ],
+                "image": "flashcart/gateway:dev",
+                "imagePullPolicy": "IfNotPresent",
+                "livenessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8081
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "name": "gateway",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  },
+                  {
+                    "containerPort": 8081
+                  },
+                  {
+                    "containerPort": 9090
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": 8081
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "1000m",
+                    "memory": "256Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "readOnlyRootFilesystem": true
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8081
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/run/keys/jwt-public.pem",
+                    "name": "jwt-verifier",
+                    "readOnly": true,
+                    "subPath": "jwt-public.pem"
+                  },
+                  {
+                    "mountPath": "/run/keys/gateway-key.pem",
+                    "name": "gateway-tls",
+                    "readOnly": true,
+                    "subPath": "gateway-key.pem"
+                  },
+                  {
+                    "mountPath": "/run/keys/gateway.pem",
+                    "name": "gateway-tls",
+                    "readOnly": true,
+                    "subPath": "gateway.pem"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsGroup": 10001,
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "name": "jwt-verifier",
+                "secret": {
+                  "defaultMode": 292,
+                  "items": [
+                    {
+                      "key": "jwt-public.pem",
+                      "path": "jwt-public.pem"
+                    }
+                  ],
+                  "secretName": "jwt-verifier"
+                }
+              },
+              {
+                "name": "gateway-tls",
+                "secret": {
+                  "defaultMode": 292,
+                  "items": [
+                    {
+                      "key": "gateway-key.pem",
+                      "path": "gateway-key.pem"
+                    },
+                    {
+                      "key": "gateway.pem",
+                      "path": "gateway.pem"
+                    }
+                  ],
+                  "secretName": "gateway-tls"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "gateway"
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "https",
+            "nodePort": 30443,
+            "port": 443,
+            "targetPort": 8080
+          }
+        ],
+        "selector": {
+          "app": "gateway"
+        },
+        "type": "NodePort"
+      }
+    },
+    {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "gateway"
+      },
+      "spec": {
+        "behavior": {
+          "scaleDown": {
+            "stabilizationWindowSeconds": 120
+          }
+        },
+        "maxReplicas": 4,
+        "metrics": [
+          {
+            "resource": {
+              "name": "cpu",
+              "target": {
+                "averageUtilization": 70,
+                "type": "Utilization"
+              }
+            },
+            "type": "Resource"
+          }
+        ],
+        "minReplicas": 1,
+        "scaleTargetRef": {
+          "apiVersion": "apps/v1",
+          "kind": "Deployment",
+          "name": "gateway"
+        }
+      }
+    },
+    {
+      "apiVersion": "policy/v1",
+      "kind": "PodDisruptionBudget",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "gateway"
+      },
+      "spec": {
+        "maxUnavailable": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "gateway",
+            "tier": "app"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "identity"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "identity",
+            "tier": "app"
+          }
+        },
+        "strategy": {
+          "rollingUpdate": {
+            "maxSurge": 1,
+            "maxUnavailable": 0
+          },
+          "type": "RollingUpdate"
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "identity",
+              "tier": "app"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "DATABASE_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "IDENTITY_URL",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ADMIN_EMAIL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "ADMIN_EMAIL",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ADMIN_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "ADMIN_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "JWT_PRIVATE_KEY",
+                    "value": "/run/keys/jwt-private.pem"
+                  }
+                ],
+                "image": "flashcart/identity:dev",
+                "imagePullPolicy": "IfNotPresent",
+                "livenessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "name": "identity",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  },
+                  {
+                    "containerPort": 8081
+                  },
+                  {
+                    "containerPort": 9090
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "1000m",
+                    "memory": "256Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "readOnlyRootFilesystem": true
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/run/keys/jwt-private.pem",
+                    "name": "jwt-signing",
+                    "readOnly": true,
+                    "subPath": "jwt-private.pem"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsGroup": 10001,
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "name": "jwt-signing",
+                "secret": {
+                  "defaultMode": 292,
+                  "items": [
+                    {
+                      "key": "jwt-private.pem",
+                      "path": "jwt-private.pem"
+                    }
+                  ],
+                  "secretName": "jwt-signing"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "identity"
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ],
+        "selector": {
+          "app": "identity"
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "catalog"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "catalog",
+            "tier": "app"
+          }
+        },
+        "strategy": {
+          "rollingUpdate": {
+            "maxSurge": 1,
+            "maxUnavailable": 0
+          },
+          "type": "RollingUpdate"
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "catalog",
+              "tier": "app"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "JWT_PUBLIC_KEY",
+                    "value": "/run/keys/jwt-public.pem"
+                  },
+                  {
+                    "name": "REDIS_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "REDIS_URL",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "DATABASE_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "CATALOG_URL",
+                        "name": "app-secrets"
+                      }
+                    }
+                  }
+                ],
+                "image": "flashcart/catalog:dev",
+                "imagePullPolicy": "IfNotPresent",
+                "livenessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "name": "catalog",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  },
+                  {
+                    "containerPort": 8081
+                  },
+                  {
+                    "containerPort": 9090
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "1000m",
+                    "memory": "256Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "readOnlyRootFilesystem": true
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/run/keys/jwt-public.pem",
+                    "name": "jwt-verifier",
+                    "readOnly": true,
+                    "subPath": "jwt-public.pem"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsGroup": 10001,
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "name": "jwt-verifier",
+                "secret": {
+                  "defaultMode": 292,
+                  "items": [
+                    {
+                      "key": "jwt-public.pem",
+                      "path": "jwt-public.pem"
+                    }
+                  ],
+                  "secretName": "jwt-verifier"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "catalog"
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ],
+        "selector": {
+          "app": "catalog"
+        }
+      }
+    },
+    {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "catalog"
+      },
+      "spec": {
+        "behavior": {
+          "scaleDown": {
+            "stabilizationWindowSeconds": 120
+          }
+        },
+        "maxReplicas": 4,
+        "metrics": [
+          {
+            "resource": {
+              "name": "cpu",
+              "target": {
+                "averageUtilization": 70,
+                "type": "Utilization"
+              }
+            },
+            "type": "Resource"
+          }
+        ],
+        "minReplicas": 1,
+        "scaleTargetRef": {
+          "apiVersion": "apps/v1",
+          "kind": "Deployment",
+          "name": "catalog"
+        }
+      }
+    },
+    {
+      "apiVersion": "policy/v1",
+      "kind": "PodDisruptionBudget",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "catalog"
+      },
+      "spec": {
+        "maxUnavailable": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "catalog",
+            "tier": "app"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "inventory"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "inventory",
+            "tier": "app"
+          }
+        },
+        "strategy": {
+          "rollingUpdate": {
+            "maxSurge": 1,
+            "maxUnavailable": 0
+          },
+          "type": "RollingUpdate"
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "inventory",
+              "tier": "app"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "JWT_PUBLIC_KEY",
+                    "value": "/run/keys/jwt-public.pem"
+                  },
+                  {
+                    "name": "DATABASE_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "INVENTORY_URL",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "GRPC_CA",
+                    "value": "/run/keys/ca.pem"
+                  },
+                  {
+                    "name": "GRPC_CERT",
+                    "value": "/run/keys/inventory.pem"
+                  },
+                  {
+                    "name": "GRPC_KEY",
+                    "value": "/run/keys/inventory-key.pem"
+                  }
+                ],
+                "image": "flashcart/inventory:dev",
+                "imagePullPolicy": "IfNotPresent",
+                "livenessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "name": "inventory",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  },
+                  {
+                    "containerPort": 8081
+                  },
+                  {
+                    "containerPort": 9090
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "1000m",
+                    "memory": "256Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "readOnlyRootFilesystem": true
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/run/keys/jwt-public.pem",
+                    "name": "jwt-verifier",
+                    "readOnly": true,
+                    "subPath": "jwt-public.pem"
+                  },
+                  {
+                    "mountPath": "/run/keys/ca.pem",
+                    "name": "grpc-inventory",
+                    "readOnly": true,
+                    "subPath": "ca.pem"
+                  },
+                  {
+                    "mountPath": "/run/keys/inventory-key.pem",
+                    "name": "grpc-inventory",
+                    "readOnly": true,
+                    "subPath": "inventory-key.pem"
+                  },
+                  {
+                    "mountPath": "/run/keys/inventory.pem",
+                    "name": "grpc-inventory",
+                    "readOnly": true,
+                    "subPath": "inventory.pem"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsGroup": 10001,
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "name": "jwt-verifier",
+                "secret": {
+                  "defaultMode": 292,
+                  "items": [
+                    {
+                      "key": "jwt-public.pem",
+                      "path": "jwt-public.pem"
+                    }
+                  ],
+                  "secretName": "jwt-verifier"
+                }
+              },
+              {
+                "name": "grpc-inventory",
+                "secret": {
+                  "defaultMode": 292,
+                  "items": [
+                    {
+                      "key": "ca.pem",
+                      "path": "ca.pem"
+                    },
+                    {
+                      "key": "inventory-key.pem",
+                      "path": "inventory-key.pem"
+                    },
+                    {
+                      "key": "inventory.pem",
+                      "path": "inventory.pem"
+                    }
+                  ],
+                  "secretName": "grpc-inventory"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "inventory"
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "http",
+            "port": 8080,
+            "targetPort": 8080
+          },
+          {
+            "name": "grpc",
+            "port": 9090,
+            "targetPort": 9090
+          }
+        ],
+        "selector": {
+          "app": "inventory"
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "orders"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "orders",
+            "tier": "app"
+          }
+        },
+        "strategy": {
+          "rollingUpdate": {
+            "maxSurge": 1,
+            "maxUnavailable": 0
+          },
+          "type": "RollingUpdate"
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "orders",
+              "tier": "app"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "JWT_PUBLIC_KEY",
+                    "value": "/run/keys/jwt-public.pem"
+                  },
+                  {
+                    "name": "ORDERS_SHARD_0_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "ORDERS_SHARD_0_URL",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ORDERS_SHARD_1_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "ORDERS_SHARD_1_URL",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "CATALOG_URL",
+                    "value": "http://catalog:8080"
+                  },
+                  {
+                    "name": "GRPC_CA",
+                    "value": "/run/keys/ca.pem"
+                  },
+                  {
+                    "name": "GRPC_CERT",
+                    "value": "/run/keys/orders.pem"
+                  },
+                  {
+                    "name": "GRPC_KEY",
+                    "value": "/run/keys/orders-key.pem"
+                  }
+                ],
+                "image": "flashcart/orders:dev",
+                "imagePullPolicy": "IfNotPresent",
+                "livenessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "name": "orders",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  },
+                  {
+                    "containerPort": 8081
+                  },
+                  {
+                    "containerPort": 9090
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "1000m",
+                    "memory": "256Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "readOnlyRootFilesystem": true
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/run/keys/jwt-public.pem",
+                    "name": "jwt-verifier",
+                    "readOnly": true,
+                    "subPath": "jwt-public.pem"
+                  },
+                  {
+                    "mountPath": "/run/keys/ca.pem",
+                    "name": "grpc-orders",
+                    "readOnly": true,
+                    "subPath": "ca.pem"
+                  },
+                  {
+                    "mountPath": "/run/keys/orders-key.pem",
+                    "name": "grpc-orders",
+                    "readOnly": true,
+                    "subPath": "orders-key.pem"
+                  },
+                  {
+                    "mountPath": "/run/keys/orders.pem",
+                    "name": "grpc-orders",
+                    "readOnly": true,
+                    "subPath": "orders.pem"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsGroup": 10001,
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "name": "jwt-verifier",
+                "secret": {
+                  "defaultMode": 292,
+                  "items": [
+                    {
+                      "key": "jwt-public.pem",
+                      "path": "jwt-public.pem"
+                    }
+                  ],
+                  "secretName": "jwt-verifier"
+                }
+              },
+              {
+                "name": "grpc-orders",
+                "secret": {
+                  "defaultMode": 292,
+                  "items": [
+                    {
+                      "key": "ca.pem",
+                      "path": "ca.pem"
+                    },
+                    {
+                      "key": "orders-key.pem",
+                      "path": "orders-key.pem"
+                    },
+                    {
+                      "key": "orders.pem",
+                      "path": "orders.pem"
+                    }
+                  ],
+                  "secretName": "grpc-orders"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "orders"
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ],
+        "selector": {
+          "app": "orders"
+        }
+      }
+    },
+    {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "orders"
+      },
+      "spec": {
+        "behavior": {
+          "scaleDown": {
+            "stabilizationWindowSeconds": 120
+          }
+        },
+        "maxReplicas": 4,
+        "metrics": [
+          {
+            "resource": {
+              "name": "cpu",
+              "target": {
+                "averageUtilization": 70,
+                "type": "Utilization"
+              }
+            },
+            "type": "Resource"
+          }
+        ],
+        "minReplicas": 1,
+        "scaleTargetRef": {
+          "apiVersion": "apps/v1",
+          "kind": "Deployment",
+          "name": "orders"
+        }
+      }
+    },
+    {
+      "apiVersion": "policy/v1",
+      "kind": "PodDisruptionBudget",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "orders"
+      },
+      "spec": {
+        "maxUnavailable": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "orders",
+            "tier": "app"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "projection"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "projection",
+            "tier": "app"
+          }
+        },
+        "strategy": {
+          "rollingUpdate": {
+            "maxSurge": 1,
+            "maxUnavailable": 0
+          },
+          "type": "RollingUpdate"
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "projection",
+              "tier": "app"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "JWT_PUBLIC_KEY",
+                    "value": "/run/keys/jwt-public.pem"
+                  },
+                  {
+                    "name": "REDIS_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "REDIS_URL",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "CLICKHOUSE_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "CLICKHOUSE_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  }
+                ],
+                "image": "flashcart/projection:dev",
+                "imagePullPolicy": "IfNotPresent",
+                "livenessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "name": "projection",
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  },
+                  {
+                    "containerPort": 8081
+                  },
+                  {
+                    "containerPort": 9090
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "1000m",
+                    "memory": "256Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "readOnlyRootFilesystem": true
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "httpGet": {
+                    "path": "/livez",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/run/keys/jwt-public.pem",
+                    "name": "jwt-verifier",
+                    "readOnly": true,
+                    "subPath": "jwt-public.pem"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsGroup": 10001,
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "name": "jwt-verifier",
+                "secret": {
+                  "defaultMode": 292,
+                  "items": [
+                    {
+                      "key": "jwt-public.pem",
+                      "path": "jwt-public.pem"
+                    }
+                  ],
+                  "secretName": "jwt-verifier"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "projection"
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ],
+        "selector": {
+          "app": "projection"
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "postgres"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "postgres",
+            "tier": "database"
+          }
+        },
+        "serviceName": "postgres",
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "postgres",
+              "tier": "database"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "postgres"
+                  },
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "postgres"
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data/pgdata"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "POSTGRES_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "IDENTITY_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "IDENTITY_DB_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "CATALOG_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "CATALOG_DB_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "INVENTORY_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "INVENTORY_DB_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  }
+                ],
+                "image": "postgres:17.6-alpine",
+                "name": "postgres",
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-ec",
+                      "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+                    ]
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "2000m",
+                    "memory": "512Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  }
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "periodSeconds": 5,
+                  "tcpSocket": {
+                    "port": 5432
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/var/lib/postgresql/data",
+                    "name": "data"
+                  },
+                  {
+                    "mountPath": "/docker-entrypoint-initdb.d",
+                    "name": "init",
+                    "readOnly": true
+                  }
+                ]
+              }
+            ],
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "configMap": {
+                  "name": "postgres-init"
+                },
+                "name": "init"
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "postgres"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 5432,
+            "targetPort": 5432
+          }
+        ],
+        "selector": {
+          "app": "postgres"
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "orders-db-0"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "orders-db-0",
+            "tier": "order-db"
+          }
+        },
+        "serviceName": "orders-db-0",
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "orders-db-0",
+              "tier": "order-db"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "orders"
+                  },
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "orders"
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data/pgdata"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "ORDERS_DB_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  }
+                ],
+                "image": "postgres:17.6-alpine",
+                "name": "orders-db-0",
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-ec",
+                      "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+                    ]
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "2000m",
+                    "memory": "512Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  }
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "periodSeconds": 5,
+                  "tcpSocket": {
+                    "port": 5432
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/var/lib/postgresql/data",
+                    "name": "data"
+                  }
+                ]
+              }
+            ],
+            "terminationGracePeriodSeconds": 30,
+            "volumes": []
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "orders-db-0"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 5432,
+            "targetPort": 5432
+          }
+        ],
+        "selector": {
+          "app": "orders-db-0"
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "orders-db-1"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "orders-db-1",
+            "tier": "order-db"
+          }
+        },
+        "serviceName": "orders-db-1",
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "orders-db-1",
+              "tier": "order-db"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "orders"
+                  },
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "orders"
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data/pgdata"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "ORDERS_DB_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  }
+                ],
+                "image": "postgres:17.6-alpine",
+                "name": "orders-db-1",
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-ec",
+                      "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+                    ]
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "2000m",
+                    "memory": "512Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  }
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "periodSeconds": 5,
+                  "tcpSocket": {
+                    "port": 5432
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/var/lib/postgresql/data",
+                    "name": "data"
+                  }
+                ]
+              }
+            ],
+            "terminationGracePeriodSeconds": 30,
+            "volumes": []
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "orders-db-1"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 5432,
+            "targetPort": 5432
+          }
+        ],
+        "selector": {
+          "app": "orders-db-1"
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "kafka"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "kafka",
+            "tier": "broker"
+          }
+        },
+        "serviceName": "kafka",
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "kafka",
+              "tier": "broker"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "KAFKA_NODE_ID",
+                    "value": "1"
+                  },
+                  {
+                    "name": "KAFKA_PROCESS_ROLES",
+                    "value": "broker,controller"
+                  },
+                  {
+                    "name": "KAFKA_LISTENERS",
+                    "value": "PLAINTEXT://:9092,CONTROLLER://:9093"
+                  },
+                  {
+                    "name": "KAFKA_ADVERTISED_LISTENERS",
+                    "value": "PLAINTEXT://kafka:9092"
+                  },
+                  {
+                    "name": "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP",
+                    "value": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+                  },
+                  {
+                    "name": "KAFKA_CONTROLLER_LISTENER_NAMES",
+                    "value": "CONTROLLER"
+                  },
+                  {
+                    "name": "KAFKA_CONTROLLER_QUORUM_VOTERS",
+                    "value": "1@kafka:9093"
+                  },
+                  {
+                    "name": "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR",
+                    "value": "1"
+                  },
+                  {
+                    "name": "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR",
+                    "value": "1"
+                  },
+                  {
+                    "name": "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR",
+                    "value": "1"
+                  },
+                  {
+                    "name": "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS",
+                    "value": "0"
+                  },
+                  {
+                    "name": "KAFKA_AUTO_CREATE_TOPICS_ENABLE",
+                    "value": "false"
+                  },
+                  {
+                    "name": "KAFKA_LOG_DIRS",
+                    "value": "/var/lib/kafka/data"
+                  },
+                  {
+                    "name": "CLUSTER_ID",
+                    "value": "MkU3OEVBNTcwNTJENDM2Qk"
+                  }
+                ],
+                "image": "apache/kafka:4.1.2",
+                "name": "kafka",
+                "ports": [
+                  {
+                    "containerPort": 9092
+                  }
+                ],
+                "readinessProbe": {
+                  "periodSeconds": 5,
+                  "tcpSocket": {
+                    "port": 9092
+                  }
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "2000m",
+                    "memory": "1536Mi"
+                  },
+                  "requests": {
+                    "cpu": "250m",
+                    "memory": "768Mi"
+                  }
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "periodSeconds": 5,
+                  "tcpSocket": {
+                    "port": 9092
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/var/lib/kafka/data",
+                    "name": "data"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "fsGroup": 1000
+            },
+            "terminationGracePeriodSeconds": 30,
+            "volumes": []
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "kafka"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 9092,
+            "targetPort": 9092
+          }
+        ],
+        "selector": {
+          "app": "kafka"
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "redis"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "redis",
+            "tier": "cache"
+          }
+        },
+        "serviceName": "redis",
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "redis",
+              "tier": "cache"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "command": [
+                  "sh",
+                  "-ec",
+                  "exec redis-server --appendonly yes --requirepass \"$REDIS_PASSWORD\" --maxmemory 256mb --maxmemory-policy noeviction"
+                ],
+                "env": [
+                  {
+                    "name": "REDIS_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "REDIS_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  }
+                ],
+                "image": "redis:7.4.6-alpine",
+                "name": "redis",
+                "ports": [
+                  {
+                    "containerPort": 6379
+                  }
+                ],
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-ec",
+                      "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep PONG"
+                    ]
+                  },
+                  "periodSeconds": 5
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "2000m",
+                    "memory": "384Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "64Mi"
+                  }
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "periodSeconds": 5,
+                  "tcpSocket": {
+                    "port": 6379
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/data",
+                    "name": "data"
+                  }
+                ]
+              }
+            ],
+            "terminationGracePeriodSeconds": 30,
+            "volumes": []
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "redis"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 6379,
+            "targetPort": 6379
+          }
+        ],
+        "selector": {
+          "app": "redis"
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "opensearch"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "opensearch",
+            "tier": "projection-db"
+          }
+        },
+        "serviceName": "opensearch",
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "opensearch",
+              "tier": "projection-db"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "discovery.type",
+                    "value": "single-node"
+                  },
+                  {
+                    "name": "DISABLE_SECURITY_PLUGIN",
+                    "value": "true"
+                  },
+                  {
+                    "name": "DISABLE_INSTALL_DEMO_CONFIG",
+                    "value": "true"
+                  },
+                  {
+                    "name": "OPENSEARCH_JAVA_OPTS",
+                    "value": "-Xms512m -Xmx512m"
+                  }
+                ],
+                "image": "opensearchproject/opensearch:3.3.2",
+                "name": "opensearch",
+                "ports": [
+                  {
+                    "containerPort": 9200
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/_cluster/health",
+                    "port": 9200
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "2000m",
+                    "memory": "1536Mi"
+                  },
+                  "requests": {
+                    "cpu": "250m",
+                    "memory": "768Mi"
+                  }
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "periodSeconds": 5,
+                  "tcpSocket": {
+                    "port": 9200
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/usr/share/opensearch/data",
+                    "name": "data"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "fsGroup": 1000
+            },
+            "terminationGracePeriodSeconds": 30,
+            "volumes": []
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "opensearch"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 9200,
+            "targetPort": 9200
+          }
+        ],
+        "selector": {
+          "app": "opensearch"
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "clickhouse"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "clickhouse",
+            "tier": "projection-db"
+          }
+        },
+        "serviceName": "clickhouse",
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "clickhouse",
+              "tier": "projection-db"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "CLICKHOUSE_DB",
+                    "value": "commerce"
+                  },
+                  {
+                    "name": "CLICKHOUSE_USER",
+                    "value": "flashcart"
+                  },
+                  {
+                    "name": "CLICKHOUSE_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "CLICKHOUSE_PASSWORD",
+                        "name": "app-secrets"
+                      }
+                    }
+                  },
+                  {
+                    "name": "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT",
+                    "value": "1"
+                  }
+                ],
+                "image": "clickhouse/clickhouse-server:25.8.3.66-alpine",
+                "name": "clickhouse",
+                "ports": [
+                  {
+                    "containerPort": 8123
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/ping",
+                    "port": 8123
+                  },
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 3
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "2000m",
+                    "memory": "1Gi"
+                  },
+                  "requests": {
+                    "cpu": "250m",
+                    "memory": "256Mi"
+                  }
+                },
+                "startupProbe": {
+                  "failureThreshold": 120,
+                  "periodSeconds": 5,
+                  "tcpSocket": {
+                    "port": 8123
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/var/lib/clickhouse",
+                    "name": "data"
+                  }
+                ]
+              }
+            ],
+            "terminationGracePeriodSeconds": 30,
+            "volumes": []
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "clickhouse"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8123,
+            "targetPort": 8123
+          }
+        ],
+        "selector": {
+          "app": "clickhouse"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/part-of": "flashcart"
+        },
+        "name": "kafka-init"
+      },
+      "spec": {
+        "backoffLimit": 5,
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "kafka-init"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "command": [
+                  "sh",
+                  "-ec",
+                  "until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list; do sleep 3; done\n/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic commerce.events.v1 --partitions 12 --replication-factor 1\n/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic commerce.dlq.v1 --partitions 3 --replication-factor 1"
+                ],
+                "image": "apache/kafka:4.1.2",
+                "name": "init",
+                "resources": {
+                  "limits": {
+                    "cpu": "1000m",
+                    "memory": "512Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  }
+                }
+              }
+            ],
+            "restartPolicy": "OnFailure"
+          }
+        }
+      }
+    }
+  ],
+  "kind": "List"
+}

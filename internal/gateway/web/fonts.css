@@ -1,0 +1,2 @@
+/* System fonts keep the storefront self-contained and avoid third-party requests. */
+body{font-family:Arial,Helvetica,sans-serif}

@@ -1,0 +1,37 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_PASSWORD: ci-only-password
+        ports: [5432:5432]
+        options: --health-cmd="pg_isready -U postgres" --health-interval=5s --health-timeout=3s --health-retries=20
+    env:
+      TEST_DATABASE_URL: postgres://postgres:ci-only-password@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: test -z "$(gofmt -l cmd internal tests api/gen)"
+      - run: go vet ./...
+      - run: go test -race -count=1 -coverprofile=coverage.out ./...
+      - run: go test -race -tags=integration -count=1 ./tests/...
+      - run: go build ./...
+      - run: go run ./cmd/bootstrap
+      - run: docker compose config --quiet
+      - run: kubectl kustomize deploy > /tmp/flashcart-k8s.yaml
+      - run: docker compose up --build -d --wait --wait-timeout 240
+      - run: go run ./cmd/smoke
+      - run: MARKETPLACE_CHECK=1 go run ./cmd/smoke
+      - if: failure()
+        run: docker compose logs --tail=100
+      - if: always()
+        run: docker compose down
